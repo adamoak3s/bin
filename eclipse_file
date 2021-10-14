@@ -1,0 +1,108 @@
+#!/bin/sh
+#
+# Author: Tom Weber
+# Date  : 9/25/2014
+#
+# Purpose: Take ClearCase's version of a file in a view, prevent ClearCase from displaying that file, and replace it with a writeable copy
+#
+# Usage: eclipse_file <filename>
+echo "========== Executing $(basename $0) =========="
+
+# Runtime Usage instructions
+if [[ $# < 1 ]];then
+    echo "Usage $0 <filename> <option>"
+    echo "option: R (This removes the eclipsed files permanently)"
+    echo "option: ALL (This removes all eclipsed files permanently)"
+    echo ""
+    echo "example: $0 /vobs/tools/jb_abc.c"
+    echo "example: $0 . ALL"
+    echo "example: $0 /vobs/tools/jb_abc.c R"
+    exit 1
+fi
+
+# Runtime Variables
+home_dir="/home/$USER"
+config_spec=$home_dir/"__temp__"
+filepath="$(cd "$(dirname "$1")";pwd)"
+filename="$(basename "$1")"
+option=$2
+
+escapedfile=`echo "$filepath/$filename" | sed 's|\/|\\\/|g'`
+configline=`cleartool catcs | grep $escapedfile | grep "\-none"`
+filecheck=`ls -l $filepath/$filename 2>/dev/null | grep "^-" | awk '{print $9}'`
+
+# === Remove individual eclipsed file and entry from config spec
+if [[ "$option" == "R" ]];then
+    if [[ "$filecheck" == "" ]];then
+        echo "[ERROR] File not found: $filepath/$filename"
+        exit 1
+    fi
+    echo "File found: $filecheck"
+    if [[ "$configline" == "" ]];then
+        echo "[ERROR] Entry not found in Config Spec for: $filepath/$filename"
+        exit 1
+    fi
+    echo "Config spec line: $configline"
+    read -p "Remove file $filecheck (Saves to a .bkp file)? (y/[n])? "
+    if [[ "$REPLY" != "y" ]];then
+        exit 1
+    fi
+    echo ""
+    `cp -f $filepath/$filename $filepath/$filename.bkp`
+    echo "[Saved file] ---> $filepath/$filename.bkp"
+    `rm $filepath/$filename`
+    # Save the config spec and then remove all lines with -none and replace config spec.
+    `cleartool catcs >> $config_spec`
+    `sed -i '/'$escapedfile'/d' $config_spec`
+    `cleartool setcs $config_spec`
+    echo "Removed line from config spec: $configline"
+    `rm $config_spec`
+
+# === Remove all eclipsed files
+elif [[ "$option" == "ALL" ]];then
+# Save all eclipsed files to .bkp then remove the files and remove -none lines from config spec.
+    eclipsed=`cleartool catcs | grep "\-none" | awk '{print $2}'`
+    echo "$eclipsed"
+    read -p "Remove ALL eclipsed files (Saves them to a .bkp file)? (y/[n])? "
+    if [[ "$REPLY" != "y" ]];then
+        exit 1
+    fi
+    # copy eclipsed file to a .bkp then delete the eclipsed file.
+    echo ""
+    for file in $eclipsed;do
+        `cp -f $file $file.bkp`
+        echo "[Saved file] : $file ===> $file.bkp"
+        `rm -f $file`
+    done
+    # Save the config spec and then remove all lines with -none and replace config spec.
+    `cleartool catcs > $config_spec`
+    `sed -i '/\-none/d' $config_spec`
+    `cleartool setcs $config_spec`
+    echo "Removed ALL -none entries from config spec"
+    `rm $config_spec`
+
+# === Create one eclipsed file
+else
+#eclipse individual file saving original in .bkp file.
+    if [[ "$filecheck" == "" ]];then
+        echo "[ERROR] File not found: $filepath/$filename"
+        exit 1
+    fi
+    echo "File found: $filecheck"
+    if [[ "$configline" != "" ]];then
+        echo "[ERROR] Entry already exists in Config Spec for: $filepath/$filename"
+        echo "Existing entry: $configline"
+        exit 1
+    fi
+    `cp -f $filepath/$filename $filepath/$filename.bkp`
+    echo "[Saved original file] ---> $filepath/$filename.bkp"
+    configline="element $filepath/$filename -none"
+    echo "$configline" > $config_spec
+    `cleartool catcs >> $config_spec`
+    `cleartool setcs $config_spec`
+    echo "Config spec line added: $configline"
+    `rm $config_spec`
+    `cp -f $filepath/$filename.bkp $filepath/$filename`
+    `chmod +w $filepath/$filename`
+    echo "Ready to edit: $filepath/$filename"
+fi
